@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TetherUSD (USDT) Wallet</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f1115; color: #eee;
+           max-width: 480px; margin: 40px auto; padding: 0 16px; }
+    .card { background: #1a1d24; border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+    h1 { text-align: center; }
+    input, button { width: 100%; padding: 12px; margin: 6px 0; border-radius: 8px;
+                    border: 1px solid #333; box-sizing: border-box; font-size: 15px; }
+    input { background: #0f1115; color: #eee; }
+    button { background: #e5232d; color: white; border: none; cursor: pointer; font-weight: bold; }
+    button:hover { opacity: 0.9; }
+    .dato { word-break: break-all; color: #aaa; font-size: 14px; }
+    .saldo { font-size: 28px; font-weight: bold; }
+    #estado { word-break: break-all; font-size: 14px; }
+    .tx { font-size: 13px; color: #bbb; margin-bottom: 6px; }
+  </style>
+</head>
+<body>
+  <h1>TetherUSD (USDT)</h1>
+
+  <div class="card">
+    <button id="conectar">Conectar TronLink</button>
+    <p>Cuenta: <span id="cuenta" class="dato">-</span></p>
+    <p>Red: <span id="red" class="dato">-</span></p>
+    <p>Token: <span id="tokeninfo" class="dato">-</span></p>
+    <p>Saldo:</p>
+    <div class="saldo"><span id="saldo">-</span> USDT</div>
+    <p>Valor en USD: <span id="usd">-</span></p>
+  </div>
+
+  <div class="card">
+    <h2>Transferir</h2>
+    <input id="destino" placeholder="Dirección destino (T...)">
+    <input id="cantidad" type="number" min="1" step="1" placeholder="Cantidad (entero)">
+    <button id="enviar">Enviar USDT</button>
+    <p id="estado"></p>
+  </div>
+
+  <div class="card">
+    <h2>Historial</h2>
+    <div id="historial"></div>
+  </div>
+
+<script>
+  // Dirección del contrato TetherUSD en TRON Mainnet
+  const CONTRATO = "TYrcBDD2A3y35Fc5DTUbepeYU6CsxA8Dk9";
+  const DECIMALES = 6n;
+
+  let tronWeb, token, cuenta;
+
+  // 1. Conectar TronLink
+  document.getElementById("conectar").onclick = async () => {
+    if (!window.tronLink) {
+      alert("No se detecta TronLink. Instálalo y recarga la página.");
+      return;
+    }
+
+    const res = await window.tronLink.request({ method: "tron_requestAccounts" });
+    if (!res || res.code !== 200) {
+      alert("Conexión rechazada o TronLink bloqueado. Desbloquéalo e inténtalo de nuevo.");
+      return;
+    }
+
+    tronWeb = window.tronLink.tronWeb;
+    cuenta = tronWeb.defaultAddress.base58;
+    document.getElementById("cuenta").textContent = cuenta;
+
+    const host = tronWeb.fullNode.host;
+    const esMainnet = host.includes("api.trongrid.io");
+    document.getElementById("red").textContent =
+      esMainnet ? "TRON Mainnet ✅" : host + " ⚠️ (cambia a TRON Mainnet)";
+
+    token = await tronWeb.contract().at(CONTRATO);
+
+    await cargarInfoToken();
+    await actualizarSaldo();
+    mostrarHistorial();
+  };
+
+  // 2. Nombre y símbolo leídos del propio contrato
+  async function cargarInfoToken() {
+    try {
+      const nombre = await token.name().call();
+      const simbolo = await token.symbol().call();
+      document.getElementById("tokeninfo").textContent = `${nombre} (${simbolo})`;
+    } catch {
+      document.getElementById("tokeninfo").textContent = "No disponible";
+    }
+  }
+  // 3. Leer saldo y precio real
+  async function actualizarSaldo(intento = 1) {
+    const saldoEl = document.getElementById("saldo");
+    const usdEl = document.getElementById("usd");
+
+    saldoEl.textContent = "Cargando...";
+    usdEl.textContent = "Cargando...";
+
+    let saldo = 0n;
+
+    // --- LEER SALDO ---
+    try {
+        const raw = await token.balanceOf(cuenta).call();
+
+        let valor;
+        if (typeof raw === "object" && raw._hex) {
+        valor = BigInt(raw._hex);
+        } else {
+        valor = BigInt(raw.toString());
+        }
+
+        saldo = valor / (10n ** DECIMALES);
+        saldoEl.textContent = saldo.toLocaleString("es-ES");
+
+    } catch (e) {
+        if (intento < 3) {
+        saldoEl.textContent = `Red saturada, reintentando (${intento}/3)...`;
+        return setTimeout(() => actualizarSaldo(intento + 1), 3000 * intento);
+        } else {
+        saldoEl.textContent = "No disponible ahora";
+        console.error("Error leyendo saldo:", e);
+        }
+    }
+
+    // --- LEER PRECIO USD ---
+    try {
+        const precio = await fetch(
+        "https://api.coingecko.com/api/v3/simple/price?ids=tether&vs_currencies=usd"
+        )
+        .then(r => r.json())
+        .then(j => j.tether.usd);
+
+        const usd = Number(saldo) * precio;
+
+        usdEl.textContent = usd.toLocaleString("es-ES", {
+        minimumFractionDigits: 2
+        }) + " USD";
+
+    } catch (e) {
+        usdEl.textContent = "No disponible";
+        console.error("Error leyendo precio USD:", e);
+    }
+  }
+
+  // 4. Enlace al historial en Tronscan
+  function mostrarHistorial() {
+    const url = `https://tronscan.org/#/address/${cuenta}/transfers`;
+    document.getElementById("historial").innerHTML =
+      `<a href="${url}" target="_blank" rel="noopener">Ver mis transferencias en Tronscan ↗</a>`;
+  }
+
+  // 5. Transferir (requiere firma en TronLink y gasta TRX real)
+  document.getElementById("enviar").onclick = async () => {
+    const destino = document.getElementById("destino").value.trim();
+    const cantidad = document.getElementById("cantidad").value;
+    const estado = document.getElementById("estado");
+
+    if (!tronWeb) return alert("Primero conecta TronLink.");
+    if (!tronWeb.isAddress(destino)) return alert("La dirección de destino no es válida.");
+    if (!/^[1-9]\d*$/.test(cantidad)) return alert("Introduce un número entero mayor que 0.");
+
+    try {
+      estado.textContent = "Esperando tu firma en TronLink...";
+      const monto = (BigInt(cantidad) * 10n ** DECIMALES).toString();
+      const tx = await token.transfer(destino, monto).send({ feeLimit: 100_000_000 });
+      estado.innerHTML =
+        `✅ Enviado. <a href="https://tronscan.org/#/transaction/${tx}" target="_blank" rel="noopener">Ver transacción ↗</a>`;
+      setTimeout(actualizarSaldo, 4000);
+    } catch (e) {
+      estado.textContent = "❌ Error: " + (e.message || e);
+    }
+  };
+</script>
+</body>
+</html>
